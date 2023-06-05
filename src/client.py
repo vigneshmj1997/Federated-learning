@@ -8,13 +8,15 @@ from collections import OrderedDict
 from accelerate import Accelerator
 import flwr as fl
 import math
+import os
 
-MODEL_NAME = "google/vit-base-patch16-224-in21k"
+MODEL_NAME = "microsoft/resnet-50"
 WEIGHT_DECAY = 0.0
 LEARNING_RATE = 5e-5
 NUM_WARMUP_STEPS = 0
 GRADIENT_ACCUMLATION_STEPS = 1
 LR_SCHEDULER_TYPE = "linear"
+TRAIN_DIR = "/Users/vignesh/Downloads/archive"
 
 
 def train(
@@ -70,11 +72,16 @@ def train(
 def test(model, eval_dataloader, accelerator, metric=evaluate.load("accuracy")):
     model.eval()
     loss = 0
+    total = 0
+    correct = 0
     for step, batch in enumerate(eval_dataloader):
         with torch.no_grad():
             outputs = model(**batch)
         loss += outputs.loss
         predictions = outputs.logits.argmax(dim=-1)
+        # total += len(batch)
+        # correct += (torch.max(predictions, 1)[1] == batch["labels"]).sum().item()
+
         predictions, references = accelerator.gather_for_metrics(
             (predictions, batch["labels"])
         )
@@ -82,22 +89,22 @@ def test(model, eval_dataloader, accelerator, metric=evaluate.load("accuracy")):
             predictions=predictions,
             references=references,
         )
-
     eval_metric = metric.compute()
-    return loss, eval_metric
+    return loss // total, eval_metric
 
 
-def main():
+def main(clien_id=None):
     # define accelerator
     accelerator = Accelerator(gradient_accumulation_steps=1)
     # define train_dataloader
     train_dataloader, eval_dataloader, labels = load_data(
         model_name=MODEL_NAME,
-        train_dir="/Users/vignesh/Downloads/archive",
+        train_dir=TRAIN_DIR,
         accelerator=accelerator,
+        num_client_id=clien_id,
     )
+    train_dataloader = train_dataloader
     model = create_model(model_name=MODEL_NAME, labels=labels)
-
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped_parameters = [
         {
@@ -134,6 +141,7 @@ def main():
     ) = accelerator.prepare(
         model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
     )
+
     # Flower client
     class IMDBClient(fl.client.NumPyClient):
         def get_parameters(self, config):
@@ -165,8 +173,13 @@ def main():
             return float(loss), len(eval_dataloader), accuracy
 
     # Start client
-    return IMDBClient()
-    #fl.client.start_numpy_client(server_address="127.0.0.1:8080", client=IMDBClient())
+
+    if __name__ == "__main__":
+        fl.client.start_numpy_client(
+            server_address="127.0.0.1:8080", client=IMDBClient()
+        )
+    else:
+        return IMDBClient()
 
 
 if __name__ == "__main__":

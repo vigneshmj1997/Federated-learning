@@ -1,5 +1,8 @@
 import flwr as fl
 from client import main
+import os
+
+os.environ["CLIENTS"] = "3"
 
 
 if __name__ == "__main__":
@@ -10,15 +13,15 @@ if __name__ == "__main__":
     )
 
     #Start server
-    fl.server.start_server(
-        server_address="0.0.0.0:8080",
-        config=fl.server.ServerConfig(num_rounds=3),
-        strategy=strategy,
-    )
-    # fl.simulation.start_simulation(
-    #     client_fn=main,
-    #     num_clients=2,
-    #     config=fl.server.ServerConfig(num_rounds=5),
+    # fl.server.start_server(
+    #     server_address="0.0.0.0:8080",
+    #     config=fl.server.ServerConfig(num_rounds=3),
     #     strategy=strategy,
-    #     #client_resources=client_resources,
     # )
+    fl.simulation.start_simulation(
+        client_fn=main,
+        num_clients=int(os.environ["CLIENTS"]),
+        config=fl.server.ServerConfig(num_rounds=1),
+        strategy=strategy,
+        # client_resources=client_resources,
+    )

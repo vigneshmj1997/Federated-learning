@@ -13,19 +13,48 @@ from torchvision.transforms import (
 from torch.utils.data import DataLoader
 import torch
 from datasets import load_dataset
+from transformers import logging
+
+logging.set_verbosity_warning()
+
+
+def dataset_splitter(dataset, num_clients, collate_fn, batch_size, shuflle=True):
+    split_boundary = []
+    for i in range(0, len(dataset), len(dataset) // num_clients):
+        split_boundary.append(i)
+    split_boundary.append(len(dataset) - 1)
+    boudary_select = [
+        [temp for temp in range(split_boundary[i], split_boundary[i + 1])]
+        for i in range(0, len(split_boundary) - 1)
+    ]
+    dataloader = []
+    for i in boudary_select:
+        dataloader.append(
+            DataLoader(
+                dataset.select(i),
+                shuffle=shuflle,
+                collate_fn=collate_fn,
+                batch_size=batch_size,
+            )
+        )
+    print("Len of datalaoder", dataloader)
+    return dataloader
 
 
 def load_data(
     model_name,
     train_dir,
     accelerator,
-    train_val_split=0.9,
+    train_val_split=0.1,
     validation_dir=None,
     batch_size=8,
+    num_client_id=None,
 ):
-
     image_processor = AutoImageProcessor.from_pretrained(model_name)
-    size = (image_processor.size["height"], image_processor.size["width"])
+    if "shortest_edge" in image_processor.size:
+        size = image_processor.size["shortest_edge"]
+    else:
+        size = (image_processor.size["height"], image_processor.size["width"])
     normalize = Normalize(
         mean=image_processor.image_mean, std=image_processor.image_std
     )
@@ -73,7 +102,7 @@ def load_data(
     )
     train_val_split = None if "validation" in dataset.keys() else train_val_split
     if isinstance(train_val_split, float) and train_val_split > 0.0:
-        split = dataset["train"].train_test_split(train_val_split)
+        split = dataset["train"].train_test_split(test_size=train_val_split)
         dataset["train"] = split["train"]
         dataset["validation"] = split["test"]
 
@@ -86,14 +115,38 @@ def load_data(
         labels = torch.tensor([example["labels"] for example in examples])
         return {"pixel_values": pixel_values, "labels": labels}
 
-    train_dataloader = DataLoader(
-        train_dataset, shuffle=True, collate_fn=collate_fn, batch_size=batch_size
-    )
-    eval_dataloader = DataLoader(
-        eval_dataset, collate_fn=collate_fn, batch_size=batch_size
-    )
+    train_dataloader = []
+    eval_dataloader = []
+    print(int(os.environ["CLIENTS"]), "Number of clinets")
+    if num_client_id != None:
+        train_dataloader = dataset_splitter(
+            train_dataset,
+            num_clients=int(os.environ["CLIENTS"]),
+            collate_fn=collate_fn,
+            batch_size=batch_size,
+        )
+        eval_dataloader = dataset_splitter(
+            eval_dataset,
+            num_clients=int(os.environ["CLIENTS"]),
+            collate_fn=collate_fn,
+            batch_size=batch_size,
+            shuflle=False,
+        )
+    else:
+        train_dataloader = DataLoader(
+            train_dataset, shuffle=True, collate_fn=collate_fn, batch_size=batch_size
+        )
+        eval_dataloader = DataLoader(
+            eval_dataset, collate_fn=collate_fn, batch_size=batch_size
+        )
     labels = dataset["train"].features["labels"].names
-    return train_dataloader, eval_dataloader, labels
+
+    print(len(train_dataloader), len(eval_dataloader), "Eval Dataloader")
+    return (
+        train_dataloader[int(num_client_id)],
+        eval_dataloader[int(num_client_id)],
+        labels,
+    )
 
 
 def create_model(model_name, labels):
@@ -109,5 +162,7 @@ def create_model(model_name, labels):
         id2label=id2label,
         finetuning_task="image-classification",
     )
-    model = AutoModelForImageClassification.from_pretrained(model_name, config=config)
+    model = AutoModelForImageClassification.from_pretrained(
+        model_name, config=config, ignore_mismatched_sizes=True
+    )
     return model
